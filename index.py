@@ -5,6 +5,7 @@ import paho.mqtt.client as mqtt
 import requests
 import boto3
 import os
+import base64
 from botocore.config import Config
 
 MQTT_BROKER = "mqtt.cloud.yandex.net"
@@ -111,6 +112,37 @@ def handler(event, context):
 
     #s3.put_object(Bucket=bucket_name, Key="test.txt", Body="Hello, world!")
 
+    # Handle OTA Update request
+    if 'firmware' in event.get('queryStringParameters', {}):
+
+        print(f"Go load firmware")
+
+        # Get the firmware file name from the request
+        firmware_file = event['queryStringParameters']['firmware']
+
+        try:
+            # Get an object (firmware) from a bucket
+            response = s3.get_object(Bucket=bucket_name, Key=firmware_file)
+            firmware_data = response['Body'].read()
+
+            firmware_base64 = base64.b64encode(firmware_data).decode('utf-8')
+
+            # We return the firmware in response
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/octet-stream',
+                    'Content-Disposition': f'attachment; filename="{firmware_file}"'
+                },
+                'body': firmware_base64,
+                'isBase64Encoded': True
+            }
+        except Exception as e:
+            return {
+                'statusCode': 500,
+                'body': f'Error: {str(e)}'
+            }
+            
     email_device_association = load_associations()
     
     for email, devices in email_device_association.items():
