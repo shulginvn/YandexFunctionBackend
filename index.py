@@ -7,6 +7,7 @@ import boto3
 import os
 import base64
 from botocore.config import Config
+import xml.etree.ElementTree as ET
 
 MQTT_BROKER = "mqtt.cloud.yandex.net"
 CA_CERT_PATH = "rootCA.crt"
@@ -112,10 +113,8 @@ def handler(event, context):
 
     #s3.put_object(Bucket=bucket_name, Key="test.txt", Body="Hello, world!")
 
-    # Handle OTA Update request
+    ### Process get firmware
     if 'firmware' in event.get('queryStringParameters', {}):
-
-        print(f"Go load firmware")
 
         # Get the firmware file name from the request
         firmware_file = event['queryStringParameters']['firmware']
@@ -127,7 +126,7 @@ def handler(event, context):
 
             firmware_base64 = base64.b64encode(firmware_data).decode('utf-8')
 
-            # We return the firmware in response
+            # Return the firmware in response
             return {
                 'statusCode': 200,
                 'headers': {
@@ -141,16 +140,85 @@ def handler(event, context):
             return {
                 'statusCode': 500,
                 'body': f'Error: {str(e)}'
-            }
-            
+            }        
+    ###
+
     email_device_association = load_associations()
-    
-    for email, devices in email_device_association.items():
-        print(f"Email: {email}, Устройства: {devices}")
     
     # Printing the input query for debugging
     print("Входной запрос (event):", json.dumps(event, ensure_ascii=False))
-    
+
+    # Getting data from the input request
+    http_method = event.get("httpMethod", "")
+    if http_method == "POST":
+
+        try:
+            body = json.loads(event.get("body", "{}"))
+
+            # Handling the case if body is a dictionary
+            if isinstance(body, dict) and "firmwareVersion" in body:
+                try:
+                    # Getting the SystemManifest.xml file from S3
+                    response = s3.get_object(Bucket=bucket_name, Key='SystemManifest.xml')
+                    manifest_data = response['Body'].read().decode('utf-8')
+
+                    # Parse XML
+                    root = ET.fromstring(manifest_data)
+                    version = root.find('.//Version').text
+
+                    return {
+                        'statusCode': 200,
+                        'headers': {
+                            'Content-Type': 'application/json'
+                        },
+                        'body': json.dumps({'version': version})
+                    }
+                except Exception as e:
+                    return {
+                        'statusCode': 500,
+                        'body': json.dumps({'error': str(e)})
+                    }
+
+            # Handling the case if body is a list
+            if isinstance(body, list):
+                email = None
+                device_id = None
+
+                # First, we look for email and device_id separately
+                for entry in body:
+                    if not isinstance(entry, dict):
+                        continue  # Skipping invalid elements
+
+                    if "email" in entry:
+                        email = entry["email"]
+                    if "device_id" in entry:
+                        device_id = entry["device_id"]
+
+                # After going through the entire list, we link the email and device_id
+                if email and device_id:
+                    if email not in email_device_association:
+                        email_device_association[email] = []
+
+                    if device_id not in email_device_association[email]:
+                        email_device_association[email].append(device_id)
+                        print(f"Сохранена ассоциация: email={email}, device_id={device_id}")
+                    else:
+                        print(f"Устройство {device_id} уже связано с email {email}")
+
+                    save_associations(email_device_association)
+
+            return {
+                "statusCode": 200,
+                "body": json.dumps({"message": "Processed successfully"})
+            }
+
+        except Exception as e:
+            return {
+                "statusCode": 400,
+                "body": json.dumps({"error": str(e)})
+            }
+
+
     # Extracting data from a request
     request_id = event.get("headers", {}).get("request_id", "")
     request_type = event.get("request_type", "")
@@ -158,40 +226,6 @@ def handler(event, context):
     devices = payload.get("devices", [])
     access_token = event.get("headers", {}).get("authorization", "")
     access_token = access_token.replace("Bearer ", "")
-    print(f"access_token {access_token}")
-
-    # Getting data from the input request
-    http_method = event.get("httpMethod", "")
-    if http_method == "POST":
-        # Processing the request body
-        body = json.loads(event["body"])
-        
-        # Split into two objects
-        email = None
-        device_id = None
-        
-        for entry in body:
-            if "email" in entry:
-                email = entry["email"]
-            if "device_id" in entry:
-                device_id = entry["device_id"]
-            
-            # Once email and device_id are found, we add them to the associations
-            if email and device_id:
-                # Check if a list of devices already exists for this email
-                if email not in email_device_association:
-                    email_device_association[email] = []  # Create a new list if email is missing
-
-                # Add device_id if it is not already in the list
-                if device_id not in email_device_association[email]:
-                    email_device_association[email].append(device_id)
-                    print(f"Сохранена ассоциация: email={email}, device_id={device_id}")
-                else:
-                    print(f"Устройство {device_id} уже связано с email {email}")
-                break  # Exiting the loop after adding data
-        save_associations(email_device_association)
-
-    
 
     # Checking for request_id
     if not request_id:
