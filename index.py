@@ -18,7 +18,7 @@ MQTT_PASSWORD = "s/p4N;>?f-8j.2PtMLZR:e"
 
 email_device_association = {}
 
-file_key = 'email_device_association.json'
+file_key = 'EmailDeviceAssociation.json'
 bucket_name = 'iotbacket'
 
 boto_config = Config(
@@ -54,11 +54,11 @@ def save_associations(data):
     except Exception as e:
         print(f"Ошибка при сохранении ассоциаций: {e}")
 
-def generate_device_name(device_id, index):
+def generate_device_name(device_id):
 
     base_name = "Умная штора"
     
-    name = f"{base_name} {index + 1}"
+    name = f"{base_name} {device_id}"
     
     if len(name) > 25:
         name = name[:25] 
@@ -178,6 +178,10 @@ def handler(event, context):
                         'statusCode': 500,
                         'body': json.dumps({'error': str(e)})
                     }
+                return {
+                    "statusCode": 200,
+                    "body": json.dumps({"message": "Processed successfully"})
+                }   
 
             # Handling the case if body is a list
             if isinstance(body, list):
@@ -207,10 +211,17 @@ def handler(event, context):
 
                     save_associations(email_device_association)
 
-            return {
-                "statusCode": 200,
-                "body": json.dumps({"message": "Processed successfully"})
-            }
+                obj = s3.get_object(Bucket=bucket_name, Key='CurtainDeviceList.json')
+                curtain_device_list = json.loads(obj['Body'].read().decode('utf-8'))
+
+                return {
+                    "statusCode": 200,
+                    "body": json.dumps({
+                            "MqttLogin": curtain_device_list[device_id]["MqttLogin"],
+                            "MqttPassword": curtain_device_list[device_id]["MqttPassword"],
+                            "message": "Processed successfully"
+                        })
+                }
 
         except Exception as e:
             return {
@@ -314,10 +325,14 @@ def handler(event, context):
         user_device_ids = email_device_association.get(user_email, [])
         devices_list = []
 
+        obj = s3.get_object(Bucket=bucket_name, Key='CurtainDeviceList.json')
+        curtain_device_list = json.loads(obj['Body'].read().decode('utf-8'))
+
         for index, device_id in enumerate(user_device_ids):
+
             devices_list.append({
-                "id": device_id,
-                "name": generate_device_name(device_id, index),
+                "id": curtain_device_list[device_id]["MqttLogin"],
+                "name": generate_device_name(device_id),
                 "type": "devices.types.openable.curtain",
                 "capabilities": [
                     {
